@@ -704,6 +704,7 @@ final class DataStreamConcurrencyTests: BaseTestCase {
 final class UploadConcurrencyTests: BaseTestCase {
     func testThatDelayedUploadStreamResultsInMultipleProgressValues() async throws {
         // Given
+        let session = stored(Session())
         let count = 75
         let baseString = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. "
         let baseData = Data(baseString.utf8)
@@ -723,11 +724,11 @@ final class UploadConcurrencyTests: BaseTestCase {
         outputStream.open()
 
         // When
-        AF.upload(inputStream, with: request)
-            .uploadProgress { progress in
+        session.upload(inputStream, with: request)
+            .uploadProgress(queue: session.rootQueue) { progress in
                 uploadProgressValues.append(progress.fractionCompleted)
             }
-            .downloadProgress { progress in
+            .downloadProgress(queue: session.rootQueue) { progress in
                 downloadProgressValues.append(progress.fractionCompleted)
             }
             .responseDecodable(of: UploadResponse.self) { resp in
@@ -805,7 +806,7 @@ final class WebSocketConcurrencyTests: BaseTestCase {
             receivedEvent.fulfill()
         }
 
-        await fulfillment(of: [receivedEvent])
+        await fulfillment(of: [receivedEvent], timeout: timeout)
 
         // Then
     }
@@ -831,12 +832,21 @@ final class ClosureAPIConcurrencyTests: BaseTestCase {
 
         // When
         let request = session.request(.get)
-        async let httpResponses = request.httpResponses().collect()
-        async let uploadProgress = request.uploadProgress().collect()
-        async let downloadProgress = request.downloadProgress().collect()
-        async let requests = request.urlRequests().collect()
-        async let tasks = request.urlSessionTasks().collect()
-        async let descriptions = request.cURLDescriptions().collect()
+        // Start streams outside async let so the asynchrony starts later.
+        let _httpResponses = request.httpResponses()
+        let _uploadProgress = request.uploadProgress()
+        let _downloadProgress = request.downloadProgress()
+        let _requests = request.urlRequests()
+        let _tasks = request.urlSessionTasks()
+        let _descriptions = request.cURLDescriptions()
+        // Start collecting in parallel.
+        async let httpResponses = _httpResponses.collect()
+        async let uploadProgress = _uploadProgress.collect()
+        async let downloadProgress = _downloadProgress.collect()
+        async let requests = _requests.collect()
+        async let tasks = _tasks.collect()
+        async let descriptions = _descriptions.collect()
+        // Start request in parallel as well.
         async let response = request.serializingDecodable(TestResponse.self).response
 
         let values: (httpResponses: [HTTPURLResponse],

@@ -397,6 +397,7 @@ final class SessionTestCase: BaseTestCase {
     @MainActor
     func disabled_testDefaultAcceptEncodingSupportsAppropriateEncodingsOnAppropriateSystems() {
         // Given
+        let session = stored(Session())
         let brotliExpectation = expectation(description: "brotli request should complete")
         let gzipExpectation = expectation(description: "gzip request should complete")
         let deflateExpectation = expectation(description: "deflate request should complete")
@@ -405,17 +406,17 @@ final class SessionTestCase: BaseTestCase {
         var deflateResponse: DataResponse<TestResponse, AFError>?
 
         // When
-        AF.request(.compression(.brotli)).responseDecodable(of: TestResponse.self) { response in
+        session.request(.compression(.brotli)).responseDecodable(of: TestResponse.self) { response in
             brotliResponse = response
             brotliExpectation.fulfill()
         }
 
-        AF.request(.compression(.gzip)).responseDecodable(of: TestResponse.self) { response in
+        session.request(.compression(.gzip)).responseDecodable(of: TestResponse.self) { response in
             gzipResponse = response
             gzipExpectation.fulfill()
         }
 
-        AF.request(.compression(.deflate)).responseDecodable(of: TestResponse.self) { response in
+        session.request(.compression(.deflate)).responseDecodable(of: TestResponse.self) { response in
             deflateResponse = response
             deflateExpectation.fulfill()
         }
@@ -496,7 +497,7 @@ final class SessionTestCase: BaseTestCase {
         // Given
         let session = Session(startRequestsImmediately: false)
 
-        let url = Endpoint().url
+        let url = Endpoint.delay(10).url
         let urlRequest = URLRequest(url: url)
 
         let expectation = expectation(description: "\(url)")
@@ -556,10 +557,10 @@ final class SessionTestCase: BaseTestCase {
     @MainActor
     func testReleasingManagerWithPendingRequestDeinitializesSuccessfully() {
         // Given
-        let monitor = ClosureEventMonitor()
-        let didCreateRequest = expectation(description: "Request created")
-        monitor.requestDidCreateTask = { _, _ in didCreateRequest.fulfill() }
-        var session: Session? = Session(startRequestsImmediately: false, requestSetup: .eager, eventMonitors: [monitor])
+        let requestCount = 100
+        let requestDidFinish = expectation(description: "Request created")
+        requestDidFinish.expectedFulfillmentCount = requestCount
+        var session: Session? = Session(startRequestsImmediately: false, requestSetup: .eager)
         #if compiler(>=6.2.3) // Started emitting a diagnostic in 6.2.2, so lets conditionally use it.
         weak let weakSession = session
         #else
@@ -567,17 +568,23 @@ final class SessionTestCase: BaseTestCase {
         #endif
 
         // When
-        let request = session?.request(.default)
+        let requests = (0..<requestCount).map { _ in
+            session?.request(.default).response { _ in requestDidFinish.fulfill() }
+        }
         session = nil
 
         waitForExpectations(timeout: timeout)
 
         // Then
-        if #available(macOS 13, iOS 16, tvOS 16, watchOS 9, *) {
-            // On 2022 OS versions and later, URLSessionTasks are completed even if not resumed before invalidating a session.
-            XCTAssertTrue([.canceling, .completed].contains(request?.task?.state))
-        } else {
-            XCTAssertEqual(request?.task?.state, .suspended)
+        for request in requests {
+            if #available(macOS 13, iOS 16, tvOS 16, watchOS 9, *) {
+                // On 2022 OS versions and later, URLSessionTasks are completed even if not resumed before invalidating a session.
+                let state = request?.task?.state
+                XCTAssertTrue([.canceling, .completed].contains(state),
+                              "task state isn't canceling or completed, it's \(String(describing: state))")
+            } else {
+                XCTAssertEqual(request?.task?.state, .suspended)
+            }
         }
         XCTAssertNil(session, "session should be nil")
         XCTAssertNil(weakSession, "weak session should be nil")
@@ -959,8 +966,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(handler.retryCount, 1)
         XCTAssertEqual(response?.result.isSuccess, true)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -996,8 +1006,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(handler.retryCount, 1)
         XCTAssertEqual(response?.result.isSuccess, true)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1029,8 +1042,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(handler.retryCount, 1)
         XCTAssertEqual(response?.result.isSuccess, true)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1062,8 +1078,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(request.retryCount, 1)
         XCTAssertEqual(response?.result.isSuccess, false)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1100,8 +1119,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(request.retryCount, 2)
         XCTAssertEqual(response?.result.isSuccess, false)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1133,8 +1155,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(request.retryCount, 1)
         XCTAssertEqual(response?.result.isSuccess, true)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1168,8 +1193,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(request.error?.isRequestAdaptationError, true)
         XCTAssertEqual(request.error?.underlyingError?.asAFError?.urlConvertible as? String, "/adapt/error/2")
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1203,8 +1231,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(request.error?.isRequestAdaptationError, true)
         XCTAssertEqual(request.error?.underlyingError?.asAFError?.urlConvertible as? String, "/adapt/error/2")
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1236,8 +1267,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(request.retryCount, 0)
         XCTAssertEqual(response?.result.isSuccess, false)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
 
         if let error = response?.result.failure {
@@ -1280,8 +1314,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(response?.error?.isResponseSerializationError, true)
         XCTAssertNotNil(response?.error?.underlyingError as? DecodingError)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1321,8 +1358,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(json1Response?.result.isSuccess, false)
         XCTAssertEqual(json2Response?.result.isSuccess, false)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
 
         let errors = [json1Response, json2Response].compactMap { $0?.error }
@@ -1375,8 +1415,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(json1Response?.result.isSuccess, false)
         XCTAssertEqual(json2Response?.result.isSuccess, false)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
 
         let errors = [json1Response, json2Response].compactMap { $0?.error }
@@ -1430,8 +1473,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(json1Response?.result.isSuccess, false)
         XCTAssertEqual(json2Response?.result.isSuccess, false)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
 
         let errors = [json1Response, json2Response].compactMap { $0?.error }
@@ -1485,8 +1531,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(json1Response?.result.isSuccess, false)
         XCTAssertEqual(json2Response?.result.isSuccess, false)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
 
         let errors = [json1Response, json2Response].compactMap { $0?.error }
@@ -1561,8 +1610,11 @@ final class SessionTestCase: BaseTestCase {
         XCTAssertEqual(response?.result.isSuccess, true)
         XCTAssertEqual(completionCallCount, 1)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty)
-            XCTAssertTrue(session.activeRequests.isEmpty)
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1713,8 +1765,11 @@ final class SessionMassActionTestCase: BaseTestCase {
         // Then
         XCTAssertTrue(responses.allSatisfy { $0.error?.isExplicitlyCancelledError == true })
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty, "requestTaskMap should be empty but has \(session.requestTaskMap.count) items")
-            XCTAssertTrue(session.activeRequests.isEmpty, "activeRequests should be empty but has \(session.activeRequests.count) items")
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1758,8 +1813,11 @@ final class SessionMassActionTestCase: BaseTestCase {
         // Then
         XCTAssertTrue(responses.allSatisfy { $0.error?.isExplicitlyCancelledError == true })
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty, "requestTaskMap should be empty but has \(session.requestTaskMap.count) items")
-            XCTAssertTrue(session.activeRequests.isEmpty, "activeRequests should be empty but has \(session.activeRequests.count) items")
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1803,8 +1861,11 @@ final class SessionMassActionTestCase: BaseTestCase {
         // Then
         XCTAssertTrue(responses.allSatisfy { $0.error?.isExplicitlyCancelledError == true })
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty, "requestTaskMap should be empty but has \(session.requestTaskMap.count) items")
-            XCTAssertTrue(session.activeRequests.isEmpty, "activeRequests should be empty but has \(session.activeRequests.count) items")
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1845,8 +1906,11 @@ final class SessionMassActionTestCase: BaseTestCase {
         // Then
         XCTAssertTrue(responses.allSatisfy { $0.error?.isExplicitlyCancelledError == true })
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty, "requestTaskMap should be empty but has \(session.requestTaskMap.count) items")
-            XCTAssertTrue(session.activeRequests.isEmpty, "activeRequests should be empty but has \(session.activeRequests.count) items")
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1888,8 +1952,11 @@ final class SessionMassActionTestCase: BaseTestCase {
         // Then
         XCTAssertTrue(responses.allSatisfy { $0.error?.isExplicitlyCancelledError == true })
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty, "requestTaskMap should be empty but has \(session.requestTaskMap.count) items")
-            XCTAssertTrue(session.activeRequests.isEmpty, "activeRequests should be empty but has \(session.activeRequests.count) items")
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 
@@ -1948,8 +2015,11 @@ final class SessionMassActionTestCase: BaseTestCase {
         // Then
         XCTAssertEqual(received?.error?.isExplicitlyCancelledError, true)
         assert(on: session.rootQueue) {
-            XCTAssertTrue(session.requestTaskMap.isEmpty, "requestTaskMap should be empty but has \(session.requestTaskMap.count) items")
-            XCTAssertTrue(session.activeRequests.isEmpty, "activeRequests should be empty but has \(session.activeRequests.count) items")
+            let (isTaskMapEmpty, isActiveRequestsEmpty) = session.mutableState.read {
+                ($0.requestTaskMap.isEmpty, $0.activeRequests.isEmpty)
+            }
+            XCTAssertTrue(isTaskMapEmpty)
+            XCTAssertTrue(isActiveRequestsEmpty)
         }
     }
 }

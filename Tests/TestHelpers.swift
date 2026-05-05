@@ -62,16 +62,17 @@ struct Endpoint {
         case basicAuth(username: String, password: String)
         case bytes(count: Int)
         case cache
-        case chunked(count: Int)
+        case chunked(count: Int, delay: Int = 40)
         case compression(Compression)
         case delay(interval: Int)
         case digestAuth(qop: String = "auth", username: String, password: String)
         case download(count: Int)
         case hiddenBasicAuth(username: String, password: String)
         case image(Image)
+        case infinite
         case ip
         case method(HTTPMethod)
-        case payloads(count: Int)
+        case payloads(count: Int, delay: Int = 40)
         case redirect(count: Int)
         case redirectTo
         case responseHeaders
@@ -92,8 +93,8 @@ struct Endpoint {
                 "/bytes/\(count)"
             case .cache:
                 "/cache"
-            case let .chunked(count):
-                "/chunked/\(count)"
+            case let .chunked(count, delay):
+                "/chunked/\(count)/\(delay)"
             case let .compression(compression):
                 "/\(compression.rawValue)"
             case let .delay(interval):
@@ -106,12 +107,14 @@ struct Endpoint {
                 "/hidden-basic-auth/\(username)/\(password)"
             case let .image(type):
                 "/image/\(type.rawValue)"
+            case .infinite:
+                "/infinite"
             case .ip:
                 "/ip"
             case let .method(method):
                 "/\(method.rawValue.lowercased())"
-            case let .payloads(count):
-                "/payloads/\(count)"
+            case let .payloads(count, delay):
+                "/payloads/\(count)/\(delay)"
             case let .redirect(count):
                 "/redirect/\(count)"
             case .redirectTo:
@@ -158,8 +161,8 @@ struct Endpoint {
 
     static let cache: Endpoint = .init(path: .cache)
 
-    static func chunked(_ count: Int) -> Endpoint {
-        Endpoint(path: .chunked(count: count))
+    static func chunked(_ count: Int, delay: Int = 70) -> Endpoint {
+        Endpoint(path: .chunked(count: count, delay: delay))
     }
 
     static func compression(_ compression: Compression) -> Endpoint {
@@ -190,6 +193,10 @@ struct Endpoint {
         Endpoint(path: .image(type))
     }
 
+    static var infinite: Endpoint {
+        Endpoint(path: .infinite)
+    }
+
     static var ip: Endpoint {
         Endpoint(path: .ip)
     }
@@ -198,8 +205,8 @@ struct Endpoint {
         Endpoint(path: .method(method), method: method)
     }
 
-    static func payloads(_ count: Int) -> Endpoint {
-        Endpoint(path: .payloads(count: count))
+    static func payloads(_ count: Int, delay: Int = 70) -> Endpoint {
+        Endpoint(path: .payloads(count: count, delay: delay))
     }
 
     static func redirect(_ count: Int) -> Endpoint {
